@@ -1,0 +1,5 @@
+GECOS
+getent
+gpasswd
+sudoers
+visudo

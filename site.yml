@@ -1,0 +1,13 @@
+---
+# Manages local users and groups. Linux hosts need root (become); Windows hosts connect as an administrator.
+
+- name: Manage local accounts on Linux hosts
+  hosts: linux
+  become: true
+  roles:
+    - role: ans_local_accounts
+
+- name: Manage local accounts on Windows hosts
+  hosts: windows
+  roles:
+    - role: ans_local_accounts

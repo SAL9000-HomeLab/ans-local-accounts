@@ -1,0 +1,63 @@
+---
+# roles/ans_local_accounts/tasks/main.yml
+
+- name: Check the group and user lists
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name | length > 0
+      - item.state | default('present') in ['present', 'absent']
+    fail_msg: "Each group and user needs a name, and state must be present or absent: {{ item }}"
+    quiet: true
+  loop: "{{ ans_local_accounts_groups + ans_local_accounts_users }}"
+  loop_control:
+    label: "{{ item.name | default('(no name)') }}"
+
+- name: Gather the OS family
+  ansible.builtin.setup:
+    gather_subset: [min]
+  when: ansible_facts['os_family'] is not defined
+
+# Copies of the input lists with `state` always set, so later tasks can select on it.
+- name: Fill in the default state of each group and user
+  ansible.builtin.set_fact:
+    ans_local_accounts__groups: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for g in ans_local_accounts_groups -%}
+      {%-   set ns.out = ns.out + [{'state': 'present'} | combine(g)] -%}
+      {%- endfor -%}
+      {{ ns.out }}
+    ans_local_accounts__users: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for u in ans_local_accounts_users -%}
+      {%-   set ns.out = ns.out + [{'state': 'present'} | combine(u)] -%}
+      {%- endfor -%}
+      {{ ns.out }}
+
+# One entry per group whose members the role manages: the members listed on the group plus every present user that
+# lists the group in its `groups`. A group that only appears in users' `groups` is never exclusive.
+- name: Work out the group memberships
+  ansible.builtin.set_fact:
+    ans_local_accounts__memberships: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for g in ans_local_accounts__groups if g.state == 'present' -%}
+      {%-   set ns.out = ns.out | combine({g.name: {
+              'name': g.name,
+              'members': g.members | default([]),
+              'exclusive': g.exclusive | default(ans_local_accounts_groups_exclusive) | bool}}) -%}
+      {%- endfor -%}
+      {%- for u in ans_local_accounts__users if u.state == 'present' -%}
+      {%-   for gname in u.groups | default([]) -%}
+      {%-     set g = ns.out[gname] | default({'name': gname, 'members': [], 'exclusive': false}) -%}
+      {%-     set ns.out = ns.out | combine({gname: g | combine({'members': g.members + [u.name]})}) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ ns.out | dict2items | map(attribute='value') | list }}
+
+- name: Manage Windows accounts
+  ansible.builtin.include_tasks: windows.yml
+  when: ansible_facts['os_family'] == 'Windows'
+
+- name: Manage Linux accounts
+  ansible.builtin.include_tasks: linux.yml
+  when: ansible_facts['os_family'] != 'Windows'

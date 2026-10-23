@@ -1,0 +1,5 @@
+# Windows connectivity - required for PSRP connections
+pypsrp>=0.8.0
+
+# Windows connectivity - required for WinRM connections (used by molecule/default)
+pywinrm>=0.4.3

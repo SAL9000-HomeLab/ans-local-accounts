@@ -1,0 +1,50 @@
+---
+# roles/ans_local_accounts/defaults/main.yml
+#
+# Local groups and users to manage. The same lists work on Linux and Windows; keys that only apply to one OS are
+# ignored on the other. Only the accounts listed here are touched: anything else on the host is left alone.
+
+# Local groups. Each item:
+#   name:        group name (required)
+#   state:       present (default) or absent
+#   members:     accounts that must be members, local or domain (DOMAIN\name on Windows)
+#   exclusive:   true makes `members` the complete member list and removes anyone else
+#                (default: ans_local_accounts_groups_exclusive)
+#   gid:         Linux only: numeric group id
+#   system:      Linux only: create a system group (default false)
+#   sudo:        Linux only: list of sudoers rules for the group, e.g. "ALL=(ALL) NOPASSWD: ALL"
+#   description: Windows only: group description
+ans_local_accounts_groups: []
+
+# Local users. Each item:
+#   name:                    user name (required)
+#   state:                   present (default) or absent
+#   groups:                  groups the user is added to (never removed from others, unless the group is exclusive)
+#   comment:                 Linux GECOS field / Windows description
+#   uid, group, shell, home: Linux only: numeric user id, primary group, login shell, home directory
+#   create_home:             Linux only (default true)
+#   system:                  Linux only: create a system account (default false)
+#   authorized_keys:         Linux only: list of SSH public keys
+#   authorized_keys_exclusive: Linux only: remove keys not listed
+#                            (default: ans_local_accounts_authorized_keys_exclusive)
+#   sudo:                    Linux only: list of sudoers rules for the user, e.g. "ALL=(ALL) NOPASSWD: ALL"
+#   fullname:                Windows only: full name
+#   account_disabled:        Windows only: disable the account (default: left as is)
+#   password_never_expires:  Windows only (default: left as is)
+# The role does not set passwords. New Linux accounts are created locked (SSH key login still works); on Windows,
+# creating a user fails when the local password policy requires a password. See README.md.
+ans_local_accounts_users: []
+
+# Default for a group's `exclusive` key. Be careful with built-in groups (Administrators, wheel): an exclusive
+# member list removes every member that is not listed, including built-in and domain accounts.
+ans_local_accounts_groups_exclusive: false
+
+# Default for a user's `authorized_keys_exclusive` key.
+ans_local_accounts_authorized_keys_exclusive: false
+
+# Linux: remove the home directory and mail spool when a user is removed.
+ans_local_accounts_remove_home: false
+
+# Linux: prefix of the files the role writes in /etc/sudoers.d. A user or group whose `sudo` list is empty, or that
+# is absent, has its file removed.
+ans_local_accounts_sudoers_prefix: ans_local_accounts-

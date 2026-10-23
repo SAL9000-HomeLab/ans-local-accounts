@@ -1,0 +1,51 @@
+---
+# roles/ans_local_accounts/tasks/windows.yml
+
+- name: Create local groups
+  ansible.windows.win_group:
+    name: "{{ item.name }}"
+    description: "{{ item.description | default(omit) }}"
+    state: present
+  loop: "{{ ans_local_accounts__groups | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Membership is handled below per group, not through win_user's groups option, so it works the same as on Linux.
+- name: Create local users
+  ansible.windows.win_user:
+    name: "{{ item.name }}"
+    fullname: "{{ item.fullname | default(omit) }}"
+    description: "{{ item.comment | default(omit) }}"
+    account_disabled: "{{ item.account_disabled | default(omit) }}"
+    password_never_expires: "{{ item.password_never_expires | default(omit) }}"
+    state: present
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# state pure removes members that are not listed.
+- name: Manage group members
+  ansible.windows.win_group_membership:
+    name: "{{ item.name }}"
+    members: "{{ item.members | unique }}"
+    state: "{{ 'pure' if item.exclusive else 'present' }}"
+  loop: "{{ ans_local_accounts__memberships }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.exclusive or item.members | length > 0
+
+- name: Remove local users
+  ansible.windows.win_user:
+    name: "{{ item.name }}"
+    state: absent
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'absent') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove local groups
+  ansible.windows.win_group:
+    name: "{{ item.name }}"
+    state: absent
+  loop: "{{ ans_local_accounts__groups | selectattr('state', '==', 'absent') }}"
+  loop_control:
+    label: "{{ item.name }}"

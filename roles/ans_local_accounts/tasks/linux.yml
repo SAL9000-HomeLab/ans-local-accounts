@@ -1,0 +1,126 @@
+---
+# roles/ans_local_accounts/tasks/linux.yml
+
+- name: Create local groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid | default(omit) }}"
+    system: "{{ item.system | default(false) | bool }}"
+    state: present
+  loop: "{{ ans_local_accounts__groups | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create local users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    uid: "{{ item.uid | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    shell: "{{ item.shell | default(omit) }}"
+    home: "{{ item.home | default(omit) }}"
+    create_home: "{{ item.create_home | default(true) | bool }}"
+    system: "{{ item.system | default(false) | bool }}"
+    state: present
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Membership is changed with gpasswd rather than the user module, so a group's member list can be managed as a
+# whole and can include accounts the role does not create. The current members come from the group database.
+- name: Read the current group members
+  ansible.builtin.getent:
+    database: group
+
+- name: Check that every group with managed members exists
+  ansible.builtin.assert:
+    that: item.name in ansible_facts['getent_group']
+    fail_msg: "Group {{ item.name }} does not exist: add it to ans_local_accounts_groups or drop it from users' groups"
+    quiet: true
+  loop: "{{ ans_local_accounts__memberships }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Set the member list of exclusive groups
+  ansible.builtin.command:
+    argv: [gpasswd, -M, "{{ item.members | unique | join(',') }}", "{{ item.name }}"]
+  loop: "{{ ans_local_accounts__memberships | selectattr('exclusive') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: >-
+    item.members | unique | sort !=
+    ansible_facts['getent_group'][item.name][2] | split(',') | select | sort
+  changed_when: true
+
+- name: Add members to non-exclusive groups
+  ansible.builtin.command:
+    argv: [gpasswd, -a, "{{ item.1 }}", "{{ item.0.name }}"]
+  loop: "{{ ans_local_accounts__memberships | rejectattr('exclusive') | subelements('members') }}"
+  loop_control:
+    label: "{{ item.0.name }}: {{ item.1 }}"
+  when: item.1 not in ansible_facts['getent_group'][item.0.name][2] | split(',')
+  changed_when: true
+
+- name: Manage SSH authorized keys
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.authorized_keys | join('\n') }}"
+    exclusive: "{{ item.authorized_keys_exclusive | default(ans_local_accounts_authorized_keys_exclusive) | bool }}"
+    state: present
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.authorized_keys | default([]) | length > 0
+
+# One sudoers file per user and group in the lists. Groups are written as %name. sudo skips files in
+# /etc/sudoers.d whose name contains a dot, so dots in names become underscores in the file name.
+- name: Work out the sudoers files
+  ansible.builtin.set_fact:
+    ans_local_accounts__sudoers: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for kind, accounts in [('user', ans_local_accounts__users), ('group', ans_local_accounts__groups)] -%}
+      {%-   for a in accounts -%}
+      {%-     set ns.out = ns.out + [{
+                'principal': ('%' if kind == 'group' else '') ~ a.name,
+                'file': ans_local_accounts_sudoers_prefix ~ kind ~ '-' ~ a.name | regex_replace('[.~]', '_'),
+                'rules': a.sudo | default([]) if a.state == 'present' else []}] -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ ns.out }}
+
+- name: Write sudoers rules
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "/etc/sudoers.d/{{ item.file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  loop: "{{ ans_local_accounts__sudoers | selectattr('rules') }}"
+  loop_control:
+    label: "{{ item.principal }}"
+
+- name: Remove sudoers rules no longer wanted
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/{{ item.file }}"
+    state: absent
+  loop: "{{ ans_local_accounts__sudoers | rejectattr('rules') }}"
+  loop_control:
+    label: "{{ item.principal }}"
+
+- name: Remove local users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: absent
+    remove: "{{ ans_local_accounts_remove_home | bool }}"
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'absent') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove local groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    state: absent
+  loop: "{{ ans_local_accounts__groups | selectattr('state', '==', 'absent') }}"
+  loop_control:
+    label: "{{ item.name }}"

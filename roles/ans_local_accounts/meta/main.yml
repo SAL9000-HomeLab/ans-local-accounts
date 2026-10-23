@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  author: Roland Serman
+  description: Manages local users, groups and group membership on Linux and Windows hosts
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+        - "10"
+    - name: Ubuntu
+      versions:
+        - noble
+    - name: Windows
+      versions:
+        - "2019"
+        - "2022"
+        - "2025"
+  galaxy_tags:
+    - users
+    - groups
+    - linux
+    - windows
+
+dependencies: []

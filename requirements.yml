@@ -1,0 +1,7 @@
+---
+# Collections the role needs. CI, ansible-lint and AWX project syncs all install from this file.
+collections:
+  - name: ansible.posix
+    version: ">=1.5.0,<3.0.0"
+  - name: ansible.windows
+    version: ">=3.0.0,<4.0.0"
