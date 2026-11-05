@@ -1,5 +1,7 @@
 GECOS
 getent
 gpasswd
+icacls
+SDDL
 sudoers
 visudo
