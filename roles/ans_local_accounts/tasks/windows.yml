@@ -82,18 +82,26 @@
       | selectattr('result.status', '==', 'no_profile') | map(attribute='item') | map(attribute='name') | list }}
   when: ans_local_accounts__no_profile | length > 0
 
-- name: Report users who may not log in with the keys in their profile
+# Does nothing on a host without sshd.
+- name: Make sshd read authorized keys from each user's profile
+  ansible.windows.win_powershell:
+    path: Set-SshdPerUserKeys.ps1
+  when: ans_local_accounts_windows_sshd_per_user_keys | bool
+  register: ans_local_accounts__sshd
+
+- name: Report that sshd has no configuration to update yet
   ansible.builtin.debug:
     msg: >-
-      This host's sshd_config has "Match Group administrators". If any of these users are in Administrators, sshd
-      reads ProgramData\ssh\administrators_authorized_keys and ignores their profile's file:
-      {{ ans_local_accounts__overridden | join(', ') }}
-  vars:
-    ans_local_accounts__overridden: >-
-      {{ ans_local_accounts__authorized_keys.results | selectattr('result', 'defined')
-      | selectattr('result.sshd_admin_override', 'defined') | selectattr('result.sshd_admin_override')
-      | map(attribute='item') | map(attribute='name') | list }}
-  when: ans_local_accounts__overridden | length > 0
+      sshd is installed but has no sshd_config, which it creates the first time it starts. Run this role again after
+      that, or members of Administrators will not be able to use the keys in their profiles.
+  when: ans_local_accounts__sshd.result.status | default('') == 'no_config'
+
+- name: Report the shared administrator keys that no longer work
+  ansible.builtin.debug:
+    msg: >-
+      ProgramData\ssh\administrators_authorized_keys has keys that sshd no longer reads. Add any that are still needed
+      to the users' authorized_keys.
+  when: ans_local_accounts__sshd.result.admin_keys_ignored | default(false)
 
 - name: Remove local users
   ansible.windows.win_user:

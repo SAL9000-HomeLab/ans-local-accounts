@@ -9,7 +9,7 @@ param(
 # left alone: the role does not create Windows accounts, and a profile only appears after the first logon.
 $ErrorActionPreference = 'Stop'
 $Ansible.Changed = $false
-$Ansible.Result = @{ status = 'no_profile'; path = $null; sshd_admin_override = $false }
+$Ansible.Result = @{ status = 'no_profile'; path = $null }
 
 # Finds profiles by account name. "name" matches any account with that name and "DOMAIN\name" only that account.
 # Profiles whose SID no longer resolves to an account are ignored.
@@ -37,13 +37,6 @@ $sid = $profiles[0].SID
 $sshDirectory = Join-Path -Path $profiles[0].LocalPath -ChildPath '.ssh'
 $file = Join-Path -Path $sshDirectory -ChildPath 'authorized_keys'
 $Ansible.Result.path = $file
-
-# Windows OpenSSH's default sshd_config sends members of Administrators to a shared file instead of this one.
-$sshdConfig = Join-Path -Path $env:ProgramData -ChildPath 'ssh\sshd_config'
-if (Test-Path -LiteralPath $sshdConfig) {
-    $Ansible.Result.sshd_admin_override = [bool](
-        Select-String -LiteralPath $sshdConfig -Pattern '^\s*Match\s+Group\s+administrators\b' -Quiet)
-}
 
 $current = @()
 if (Test-Path -LiteralPath $file) {

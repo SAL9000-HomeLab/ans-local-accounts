@@ -42,6 +42,10 @@ ans_local_accounts_groups_exclusive: false
 # Default for a user's `authorized_keys_exclusive` key.
 ans_local_accounts_authorized_keys_exclusive: false
 
+# Windows: make sshd read each user's own authorized_keys, including for members of Administrators, by changing
+# sshd_config where sshd is installed. See README.md.
+ans_local_accounts_windows_sshd_per_user_keys: true
+
 # Linux: remove the home directory and mail spool when a user is removed.
 ans_local_accounts_remove_home: false
 

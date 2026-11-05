@@ -107,7 +107,11 @@ ans_local_accounts_users:
   `DOMAIN\name`.
 - **Windows administrators and SSH:** the default Windows `sshd_config` has `Match Group administrators`, which makes
   sshd read `ProgramData\\ssh\\administrators_authorized_keys` for members of Administrators and ignore the file in
-  their profile. The role does not manage that shared file. It reports when a host has this setting.
+  their profile. Where sshd is installed, the role comments out the `AuthorizedKeysFile` line in that block, so everyone
+  uses their own file. It checks the result with `sshd -t` first and restarts sshd if it is running. Keys in the shared
+  file stop working, and the role reports when that file has any. Turn this off with
+  `ans_local_accounts_windows_sshd_per_user_keys: false`. The role does not install OpenSSH: run it after whatever does,
+  and after sshd has started once, because that creates `sshd_config`.
 
 ## Inventory
 
