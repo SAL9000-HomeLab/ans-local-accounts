@@ -1,9 +1,9 @@
 # ans-local-accounts
 
 Manages local users, local groups and group membership on Linux and Windows hosts with one role,
-`ans_local_accounts`, driven by the same two lists on both. On Linux it also manages SSH authorized keys and sudo
-rules. It is meant to be included from [ans-defos] as part of the default OS configuration, and [site.yml](site.yml)
-runs it on its own.
+`ans_local_accounts`, driven by the same two lists on both. It also manages SSH authorized keys on both, and sudo rules
+on Linux. On Windows it does not create users. It is meant to be included from [ans-defos] as part of the default OS
+configuration, and [site.yml](site.yml) runs it on its own.
 
 Only the accounts in the lists are touched: other users and groups on the host are left alone, and group
 membership is only added unless a group is marked `exclusive`.
@@ -34,7 +34,7 @@ Defaults and the full list of keys are in
 | `ans_local_accounts_groups` | `[]` | Local groups to create or remove, and their members. |
 | `ans_local_accounts_users` | `[]` | Local users to create or remove, and the groups they belong to. |
 | `ans_local_accounts_groups_exclusive` | `false` | Default for a group's `exclusive` key. |
-| `ans_local_accounts_authorized_keys_exclusive` | `false` | Linux: default for a user's `authorized_keys_exclusive` key. |
+| `ans_local_accounts_authorized_keys_exclusive` | `false` | Default for a user's `authorized_keys_exclusive` key. |
 | `ans_local_accounts_remove_home` | `false` | Linux: delete the home directory when a user is removed. |
 | `ans_local_accounts_sudoers_prefix` | `ans_local_accounts-` | Linux: prefix of the files written to `/etc/sudoers.d`. |
 
@@ -54,14 +54,14 @@ Keys for each user:
 
 | Key | OS | Purpose |
 | --- | --- | --- |
-| `name` | both | User name (required). |
-| `state` | both | `present` (default) or `absent`. |
+| `name` | both | User name (required). On Windows, `DOMAIN\name` selects a domain account for `groups` and `authorized_keys`. |
+| `state` | both | `present` (default) or `absent`. On Windows, `present` does not create the user. |
 | `groups` | both | Groups the user is added to. The groups must already exist or be in `ans_local_accounts_groups`. |
 | `comment` | both | GECOS field on Linux, description on Windows. |
 | `fullname`, `account_disabled`, `password_never_expires` | Windows | Passed to `win_user`; left as is when unset. |
 | `uid`, `group`, `shell`, `home`, `create_home`, `system` | Linux | Passed to the `user` module. |
-| `authorized_keys` | Linux | SSH public keys. |
-| `authorized_keys_exclusive` | Linux | `true` removes keys that are not listed. |
+| `authorized_keys` | both | SSH public keys. On Windows, written only when the user has a profile on the host. |
+| `authorized_keys_exclusive` | both | `true` removes keys that are not listed. |
 | `sudo` | Linux | Sudoers rules for the user, written as `name <rule>`. |
 
 Example, in group vars or the AWX inventory:
@@ -96,9 +96,22 @@ ans_local_accounts_users:
   sudo ignores files with a dot in the name. The file is removed when `sudo` is empty or the account is absent.
   Files for accounts no longer in the lists at all are not cleaned up; set the account to `state: absent` first.
 - **Passwords:** the role does not set passwords. New Linux accounts are created locked: SSH key login still works
-  (with the default `UsePAM yes`), password login does not. On Windows, creating a user without a password fails
-  when the local password policy requires one, so in practice the role is for groups and membership there, and
-  for users that already exist.
+  (with the default `UsePAM yes`), password login does not.
+- **Windows users:** the role does not create them, until password handling is decided. A listed user that does not
+  exist is reported and left out of group membership. Existing users have their `comment`, `fullname`,
+  `account_disabled` and `password_never_expires` updated, and `state: absent` still removes them.
+- **Windows authorized keys:** for each listed user with `authorized_keys`, the role looks for a profile on the host
+  by account name. If there is one, it writes `.ssh\\authorized_keys` there and sets the file's owner and permissions
+  the way sshd requires. If not, it reports the user and writes nothing; a profile appears after the first logon. This
+  also works for domain users. When a short name matches more than one profile, the task fails and asks for
+  `DOMAIN\name`.
+- **Windows administrators and SSH:** the default Windows `sshd_config` has `Match Group administrators`, which makes
+  sshd read `ProgramData\\ssh\\administrators_authorized_keys` for members of Administrators and ignore the file in
+  their profile. Where sshd is installed, the role comments out the `AuthorizedKeysFile` line in that block, so everyone
+  uses their own file. It checks the result with `sshd -t` first and restarts sshd if it is running. Keys in the shared
+  file stop working, and the role reports when that file has any. Turn this off with
+  `ans_local_accounts_windows_sshd_per_user_keys: false`. The role does not install OpenSSH: run it after whatever does,
+  and after sshd has started once, because that creates `sshd_config`.
 
 ## Inventory
 

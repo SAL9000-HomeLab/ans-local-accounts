@@ -10,8 +10,34 @@
   loop_control:
     label: "{{ item.name }}"
 
-# Membership is handled below per group, not through win_user's groups option, so it works the same as on Linux.
-- name: Create local users
+# The role does not create Windows users until passwords are decided on (see README.md), so a user in the list may not
+# exist here. Names like DOMAIN\name are domain accounts and are not looked up locally.
+- name: Look up local users
+  ansible.windows.win_user:
+    name: "{{ item.name }}"
+    state: query
+  loop: >-
+    {{ ans_local_accounts__users | selectattr('state', '==', 'present')
+    | rejectattr('name', 'search', '[\\\\]') | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  register: ans_local_accounts__user_lookup
+
+- name: Work out which local users exist
+  ansible.builtin.set_fact:
+    ans_local_accounts__existing_users: >-
+      {{ ans_local_accounts__user_lookup.results | selectattr('state', '==', 'present')
+      | map(attribute='item') | map(attribute='name') | list }}
+    ans_local_accounts__missing_users: >-
+      {{ ans_local_accounts__user_lookup.results | rejectattr('state', '==', 'present')
+      | map(attribute='item') | map(attribute='name') | list }}
+
+- name: Report the local users that do not exist
+  ansible.builtin.debug:
+    msg: "Not created, and not added to groups: {{ ans_local_accounts__missing_users | join(', ') }}"
+  when: ans_local_accounts__missing_users | length > 0
+
+- name: Update existing local users
   ansible.windows.win_user:
     name: "{{ item.name }}"
     fullname: "{{ item.fullname | default(omit) }}"
@@ -19,7 +45,7 @@
     account_disabled: "{{ item.account_disabled | default(omit) }}"
     password_never_expires: "{{ item.password_never_expires | default(omit) }}"
     state: present
-  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop: "{{ ans_local_accounts__users | selectattr('name', 'in', ans_local_accounts__existing_users) }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -27,12 +53,55 @@
 - name: Manage group members
   ansible.windows.win_group_membership:
     name: "{{ item.name }}"
-    members: "{{ item.members | unique }}"
+    members: "{{ item.members | unique | difference(ans_local_accounts__missing_users) }}"
     state: "{{ 'pure' if item.exclusive else 'present' }}"
   loop: "{{ ans_local_accounts__memberships }}"
   loop_control:
     label: "{{ item.name }}"
-  when: item.exclusive or item.members | length > 0
+  when: item.exclusive or item.members | unique | difference(ans_local_accounts__missing_users) | length > 0
+
+- name: Manage SSH authorized keys in existing user profiles
+  ansible.windows.win_powershell:
+    path: Set-AuthorizedKeys.ps1
+    parameters:
+      Name: "{{ item.name }}"
+      Keys: "{{ item.authorized_keys }}"
+      Exclusive: "{{ item.authorized_keys_exclusive | default(ans_local_accounts_authorized_keys_exclusive) | bool }}"
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.authorized_keys | default([]) | length > 0
+  register: ans_local_accounts__authorized_keys
+
+- name: Report the users whose authorized keys were not written
+  ansible.builtin.debug:
+    msg: "No profile on this host, keys not written: {{ ans_local_accounts__no_profile | join(', ') }}"
+  vars:
+    ans_local_accounts__no_profile: >-
+      {{ ans_local_accounts__authorized_keys.results | selectattr('result', 'defined')
+      | selectattr('result.status', '==', 'no_profile') | map(attribute='item') | map(attribute='name') | list }}
+  when: ans_local_accounts__no_profile | length > 0
+
+# Does nothing on a host without sshd.
+- name: Make sshd read authorized keys from each user's profile
+  ansible.windows.win_powershell:
+    path: Set-SshdPerUserKeys.ps1
+  when: ans_local_accounts_windows_sshd_per_user_keys | bool
+  register: ans_local_accounts__sshd
+
+- name: Report that sshd has no configuration to update yet
+  ansible.builtin.debug:
+    msg: >-
+      sshd is installed but has no sshd_config, which it creates the first time it starts. Run this role again after
+      that, or members of Administrators will not be able to use the keys in their profiles.
+  when: ans_local_accounts__sshd.result.status | default('') == 'no_config'
+
+- name: Report the shared administrator keys that no longer work
+  ansible.builtin.debug:
+    msg: >-
+      ProgramData\ssh\administrators_authorized_keys has keys that sshd no longer reads. Add any that are still needed
+      to the users' authorized_keys.
+  when: ans_local_accounts__sshd.result.admin_keys_ignored | default(false)
 
 - name: Remove local users
   ansible.windows.win_user:
