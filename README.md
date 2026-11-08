@@ -60,6 +60,7 @@ Keys for each user:
 | `comment` | both | GECOS field on Linux, description on Windows. |
 | `fullname`, `account_disabled`, `password_never_expires` | Windows | Passed to `win_user`; left as is when unset. |
 | `uid`, `group`, `shell`, `home`, `create_home`, `system` | Linux | Passed to the `user` module. |
+| `create` | Linux | `false` for an account the role must not create or remove, such as an AD user through SSSD (default `true`). |
 | `authorized_keys` | both | SSH public keys. On Windows, written only when the user has a profile on the host. |
 | `authorized_keys_exclusive` | both | `true` removes keys that are not listed. |
 | `sudo` | Linux | Sudoers rules for the user, written as `name <rule>`. |
@@ -70,6 +71,8 @@ Example, in group vars or the AWX inventory:
 ans_local_accounts_groups:
   - name: appadmins
     sudo: ["ALL=(ALL) NOPASSWD: ALL"]
+  - name: Administrators              # Windows built-in group: domain group as local administrators
+    members: ['EXAMPLE\ServerAdmins']
   - name: Remote Desktop Users        # Windows built-in group
     members: ['EXAMPLE\Support']
 ans_local_accounts_users:
@@ -89,6 +92,10 @@ ans_local_accounts_users:
 - **Membership:** a group's members are its `members` plus every present user that lists it in `groups`. On Linux
   the role runs `gpasswd` only when `/etc/group` differs, so reruns report no changes. On Windows it uses
   `win_group_membership` (`state: pure` for exclusive groups).
+- **Windows domain members:** members named `DOMAIN\name` are looked up on the host first. Those that do not
+  resolve, because the host is not joined to that domain or its domain controllers cannot be reached, are reported and
+  left out, so one inventory can give a domain group to every Windows host. An exclusive group with such a member is
+  reported and not changed at all, since `state: pure` would remove a member that may still be in the group.
 - **Exclusive groups:** use them with care on built-in groups such as `Administrators` or `wheel`. Every member that
   is not listed is removed, including built-in accounts and domain groups.
 - **Sudo:** each user and group in the lists gets its own file, `/etc/sudoers.d/<prefix>user-<name>` or
@@ -97,6 +104,22 @@ ans_local_accounts_users:
   Files for accounts no longer in the lists at all are not cleaned up; set the account to `state: absent` first.
 - **Passwords:** the role does not set passwords. New Linux accounts are created locked: SSH key login still works
   (with the default `UsePAM yes`), password login does not.
+- **Accounts the role does not create (Linux):** a user with `create: false` is looked up through NSS
+  (`getent passwd <name>`), so domain users from SSSD are found. If it resolves, the role creates its home directory
+  when missing (with `mkhomedir_helper`, as `pam_mkhomedir` does at first login, mode 0700, then `restorecon` where
+  SELinux is on), adds it to groups, and writes its keys and sudo rules. If it does not resolve, for example on a host
+  not joined to the domain, it is reported and only its sudo rules are written. An exclusive group with such a member
+  is reported and left unchanged. `state: absent` removes its sudo rules but never the account. Example, for hosts
+  joined with [ans-ldap-auth] using short names:
+
+  ```yaml
+  ans_local_accounts_users:
+    - name: jdoe                      # AD user, not EXAMPLE\jdoe
+      create: false
+      authorized_keys:
+        - ssh-ed25519 AAAA... jdoe@example
+  ```
+
 - **Windows users:** the role does not create them, until password handling is decided. A listed user that does not
   exist is reported and left out of group membership. Existing users have their `comment`, `fullname`,
   `account_disabled` and `password_never_expires` updated, and `state: absent` still removes them.
@@ -147,3 +170,4 @@ publishes that version's section as a GitHub release.
 MIT, see [LICENSE](LICENSE).
 
 [ans-defos]: https://github.com/SAL9000-HomeLab/ans-defos
+[ans-ldap-auth]: https://github.com/SAL9000-HomeLab/ans-ldap-auth

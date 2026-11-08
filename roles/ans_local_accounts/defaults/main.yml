@@ -9,6 +9,7 @@
 #   name:        group name (required)
 #   state:       present (default) or absent
 #   members:     accounts that must be members, local or domain (DOMAIN\name on Windows)
+#                Windows: DOMAIN\name members that do not resolve on the host are reported and skipped
 #   exclusive:   true makes `members` the complete member list and removes anyone else
 #                (default: ans_local_accounts_groups_exclusive)
 #   gid:         Linux only: numeric group id
@@ -24,6 +25,9 @@ ans_local_accounts_groups: []
 #   comment:                 Linux GECOS field / Windows description
 #   uid, group, shell, home: Linux only: numeric user id, primary group, login shell, home directory
 #   create_home:             Linux only (default true)
+#   create:                  Linux only: false for an account owned by something else, such as an AD user through
+#                            SSSD. The role never creates or removes it, and creates its home (mkhomedir_helper) and
+#                            manages its groups and keys only when it resolves on the host (default true)
 #   system:                  Linux only: create a system account (default false)
 #   authorized_keys:         list of SSH public keys. Windows: written only when the user has a profile on the host
 #   authorized_keys_exclusive: remove keys not listed

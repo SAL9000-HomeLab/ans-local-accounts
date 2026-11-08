@@ -49,16 +49,57 @@
   loop_control:
     label: "{{ item.name }}"
 
+# Members named DOMAIN\name that do not resolve here (the host is not joined to that domain, or its controllers cannot
+# be reached) would make win_group_membership fail, so the same inventory can list domain groups for every host.
+- name: Look up the domain members of groups
+  ansible.windows.win_powershell:
+    path: Find-UnresolvedAccounts.ps1
+    parameters:
+      Name: "{{ ans_local_accounts__domain_members }}"
+  vars:
+    ans_local_accounts__domain_members: >-
+      {{ ans_local_accounts__memberships | map(attribute='members') | flatten
+      | select('search', '[\\\\]') | unique | list }}
+  when: ans_local_accounts__domain_members | length > 0
+  register: ans_local_accounts__domain_lookup
+
+- name: Work out which members to leave out
+  ansible.builtin.set_fact:
+    ans_local_accounts__unresolved: "{{ ans_local_accounts__lookup_unresolved }}"
+    ans_local_accounts__skipped_members: >-
+      {{ ans_local_accounts__missing_users + ans_local_accounts__lookup_unresolved }}
+  vars:
+    ans_local_accounts__lookup_unresolved: "{{ ans_local_accounts__domain_lookup.result.unresolved | default([]) }}"
+
+- name: Report the domain members that do not resolve on this host
+  ansible.builtin.debug:
+    msg: "Not found on this host, not added to groups: {{ ans_local_accounts__unresolved | join(', ') }}"
+  when: ans_local_accounts__unresolved | length > 0
+
+# An exclusive group with an unresolved member is left alone: the member may still be in the group (a domain whose
+# controllers are down), and state pure would remove it.
+- name: Report the exclusive groups left alone
+  ansible.builtin.debug:
+    msg: >-
+      Exclusive group {{ item.name }} not changed, because these members do not resolve on this host:
+      {{ item.members | intersect(ans_local_accounts__unresolved) | join(', ') }}
+  loop: "{{ ans_local_accounts__memberships | selectattr('exclusive') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.members | intersect(ans_local_accounts__unresolved) | length > 0
+
 # state pure removes members that are not listed.
 - name: Manage group members
   ansible.windows.win_group_membership:
     name: "{{ item.name }}"
-    members: "{{ item.members | unique | difference(ans_local_accounts__missing_users) }}"
+    members: "{{ item.members | unique | difference(ans_local_accounts__skipped_members) }}"
     state: "{{ 'pure' if item.exclusive else 'present' }}"
   loop: "{{ ans_local_accounts__memberships }}"
   loop_control:
     label: "{{ item.name }}"
-  when: item.exclusive or item.members | unique | difference(ans_local_accounts__missing_users) | length > 0
+  when: >-
+    (item.exclusive and item.members | intersect(ans_local_accounts__unresolved) | length == 0)
+    or (not item.exclusive and item.members | unique | difference(ans_local_accounts__skipped_members) | length > 0)
 
 - name: Manage SSH authorized keys in existing user profiles
   ansible.windows.win_powershell:

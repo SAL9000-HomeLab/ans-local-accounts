@@ -22,9 +22,68 @@
     create_home: "{{ item.create_home | default(true) | bool }}"
     system: "{{ item.system | default(false) | bool }}"
     state: present
-  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') | selectattr('create') }}"
   loop_control:
     label: "{{ item.name }}"
+
+# Users with `create: false` belong to something else, usually SSSD for domain users: the role never creates or removes
+# them, and manages their home, groups and keys only when the account resolves. getent goes through NSS, so it finds
+# domain users that `getent passwd` without a key does not list.
+- name: Look up the accounts the role does not create
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ item.name }}"
+    fail_key: false
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') | rejectattr('create') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: ans_local_accounts__account_lookup
+
+- name: Work out which of those accounts exist
+  ansible.builtin.set_fact:
+    ans_local_accounts__found_accounts: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for r in ans_local_accounts__account_lookup.results -%}
+      {%-   set entry = r.ansible_facts.getent_passwd[r.item.name] -%}
+      {%-   if entry -%}
+      {%-     set ns.out = ns.out + [{'name': r.item.name, 'home': entry[4],
+                                     'create_home': r.item.create_home | default(true) | bool}] -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ ns.out }}
+    ans_local_accounts__missing_users: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for r in ans_local_accounts__account_lookup.results -%}
+      {%-   if not r.ansible_facts.getent_passwd[r.item.name] -%}
+      {%-     set ns.out = ns.out + [r.item.name] -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ ns.out }}
+
+- name: Report the accounts that do not resolve on this host
+  ansible.builtin.debug:
+    msg: "Not found on this host, home, groups and keys skipped: {{ ans_local_accounts__missing_users | join(', ') }}"
+  when: ans_local_accounts__missing_users | length > 0
+
+# mkhomedir_helper is what pam_mkhomedir runs at first login: it copies /etc/skel and sets the owner. The umask makes
+# the home directory 0700. The path comes from NSS.
+- name: Create the home directories of accounts the role does not create
+  ansible.builtin.command:
+    argv: [mkhomedir_helper, "{{ item.name }}", "0077"]
+    creates: "{{ item.home }}"
+  loop: "{{ ans_local_accounts__found_accounts | selectattr('create_home') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: ans_local_accounts__mkhomedir
+
+- name: Restore the SELinux labels of the new home directories
+  ansible.builtin.command:
+    argv: [restorecon, -R, "{{ item.item.home }}"]
+  loop: "{{ ans_local_accounts__mkhomedir.results | selectattr('changed') }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: ansible_facts['selinux']['status'] | default('disabled') == 'enabled'
+  changed_when: true
 
 # Membership is changed with gpasswd rather than the user module, so a group's member list can be managed as a
 # whole and can include accounts the role does not create. The current members come from the group database.
@@ -41,15 +100,29 @@
   loop_control:
     label: "{{ item.name }}"
 
+# An exclusive group with a member that does not resolve is left alone: the account may only be unreachable for now
+# (SSSD offline), and gpasswd -M would drop it from the group.
+- name: Report the exclusive groups left alone
+  ansible.builtin.debug:
+    msg: >-
+      Exclusive group {{ item.name }} not changed, because these members do not resolve on this host:
+      {{ item.members | intersect(ans_local_accounts__missing_users) | join(', ') }}
+  loop: "{{ ans_local_accounts__memberships | selectattr('exclusive') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.members | intersect(ans_local_accounts__missing_users) | length > 0
+
 - name: Set the member list of exclusive groups
   ansible.builtin.command:
     argv: [gpasswd, -M, "{{ item.members | unique | join(',') }}", "{{ item.name }}"]
   loop: "{{ ans_local_accounts__memberships | selectattr('exclusive') }}"
   loop_control:
     label: "{{ item.name }}"
-  when: >-
-    item.members | unique | sort !=
-    ansible_facts['getent_group'][item.name][2] | split(',') | select | sort
+  when:
+    - item.members | intersect(ans_local_accounts__missing_users) | length == 0
+    - >-
+      item.members | unique | sort !=
+      ansible_facts['getent_group'][item.name][2] | split(',') | select | sort
   changed_when: true
 
 - name: Add members to non-exclusive groups
@@ -58,7 +131,9 @@
   loop: "{{ ans_local_accounts__memberships | rejectattr('exclusive') | subelements('members') }}"
   loop_control:
     label: "{{ item.0.name }}: {{ item.1 }}"
-  when: item.1 not in ansible_facts['getent_group'][item.0.name][2] | split(',')
+  when:
+    - item.1 not in ans_local_accounts__missing_users
+    - item.1 not in ansible_facts['getent_group'][item.0.name][2] | split(',')
   changed_when: true
 
 - name: Manage SSH authorized keys
@@ -70,7 +145,9 @@
   loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'present') }}"
   loop_control:
     label: "{{ item.name }}"
-  when: item.authorized_keys | default([]) | length > 0
+  when:
+    - item.authorized_keys | default([]) | length > 0
+    - item.name not in ans_local_accounts__missing_users
 
 # One sudoers file per user and group in the lists. Groups are written as %name. sudo skips files in
 # /etc/sudoers.d whose name contains a dot, so dots in names become underscores in the file name.
@@ -113,7 +190,7 @@
     name: "{{ item.name }}"
     state: absent
     remove: "{{ ans_local_accounts_remove_home | bool }}"
-  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'absent') }}"
+  loop: "{{ ans_local_accounts__users | selectattr('state', '==', 'absent') | selectattr('create') }}"
   loop_control:
     label: "{{ item.name }}"
 

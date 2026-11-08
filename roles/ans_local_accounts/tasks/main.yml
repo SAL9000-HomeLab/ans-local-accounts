@@ -7,7 +7,10 @@
       - item.name is defined
       - item.name | length > 0
       - item.state | default('present') in ['present', 'absent']
-    fail_msg: "Each group and user needs a name, and state must be present or absent: {{ item }}"
+      - item.create | default(true) is boolean
+    fail_msg: >-
+      Each group and user needs a name, state must be present or absent, and create must be true or false:
+      {{ item }}
     quiet: true
   loop: "{{ ans_local_accounts_groups + ans_local_accounts_users }}"
   loop_control:
@@ -30,7 +33,7 @@
     ans_local_accounts__users: >-
       {%- set ns = namespace(out=[]) -%}
       {%- for u in ans_local_accounts_users -%}
-      {%-   set ns.out = ns.out + [{'state': 'present'} | combine(u)] -%}
+      {%-   set ns.out = ns.out + [{'state': 'present', 'create': true} | combine(u)] -%}
       {%- endfor -%}
       {{ ns.out }}
 
